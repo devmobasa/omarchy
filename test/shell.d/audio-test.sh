@@ -24,6 +24,59 @@ assertEqual(
   'Microphone',
   'audio chooses friendly node labels'
 )
+const mixerOutputs = [1, 2, 3].map((n) => ({
+  ready: true,
+  id: 40 + n,
+  description: `Mixer Output ${n}`,
+  nickname: 'Mixer',
+  properties: { 'node.nick': 'Mixer' },
+  name: `alsa_output.mixer.output-${n}`
+}))
+assertEqual(
+  audio.nodeLabel(mixerOutputs[1], mixerOutputs),
+  'Mixer Output 2',
+  'audio prefers endpoint descriptions over shared device nicknames'
+)
+
+const hdmiSink = {
+  ready: true,
+  id: 51,
+  description: 'GA104 High Definition Audio Controller Digital Stereo (HDMI)',
+  nickname: 'LG HDR 4K',
+  properties: { 'node.nick': 'LG HDR 4K' },
+  name: 'alsa_output.pci-0000_01_00.1.hdmi-stereo'
+}
+const analogSink = {
+  ready: true,
+  id: 52,
+  description: 'Built-in Audio Analog Stereo',
+  nickname: 'Built-in Audio Speakers Output',
+  properties: { 'node.nick': 'Built-in Audio Speakers Output' },
+  name: 'alsa_output.pci-0000_00_1f.3.analog-stereo'
+}
+assertEqual(
+  audio.nodeLabel(hdmiSink, [hdmiSink, analogSink]),
+  'LG HDR 4K',
+  'audio keeps the display nickname for HDMI sinks'
+)
+assertEqual(
+  audio.nodeLabel(hdmiSink),
+  'LG HDR 4K',
+  'audio keeps distinctive nicknames when no peers are known'
+)
+assertEqual(
+  audio.nodeLabel(analogSink, [hdmiSink, analogSink]),
+  'Speakers',
+  'audio cleans unshared nicknames instead of falling back to descriptions'
+)
+assert(
+  audio.nicknameIsShared(mixerOutputs[0], mixerOutputs),
+  'audio spots nicknames shared across endpoints'
+)
+assert(
+  !audio.nicknameIsShared(hdmiSink, [hdmiSink, analogSink]),
+  'audio does not treat a node as sharing its own nickname'
+)
 
 const headphones = { ready: true, name: 'bluez_output.airpods', properties: { 'device.product.name': 'AirPods Headphones' } }
 assert(audio.isHeadphones(headphones), 'audio detects headphone devices')

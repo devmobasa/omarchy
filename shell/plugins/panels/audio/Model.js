@@ -61,12 +61,52 @@ function nodeProps(node) {
   return node && node.ready && node.properties ? node.properties : {}
 }
 
-function nodeLabel(node) {
-  if (!node) return "Unknown"
+function nodeNickname(node) {
   var p = nodeProps(node)
-  var nickname = friendlyDeviceLabel(node.nickname || node.nick || p["node.nick"] || p["device.profile.description"] || "")
-  if (nickname) return nickname
-  return friendlyDeviceLabel(node.description || p["node.description"] || node.name || "Unknown")
+  return friendlyDeviceLabel(node.nickname || node.nick || p["node.nick"] || p["device.profile.description"] || "")
+}
+
+function nodeDescription(node) {
+  var p = nodeProps(node)
+  return friendlyDeviceLabel(node.description || p["node.description"] || "")
+}
+
+function isSameNode(a, b) {
+  if (a === b) return true
+  if (!a || !b) return false
+  if (a.id !== undefined && b.id !== undefined) return a.id === b.id
+  return !!a.name && a.name === b.name
+}
+
+// A single physical device can expose several endpoints that all answer to one
+// nickname — a multi-channel USB mixer nicknames every one of its outputs
+// "Mixer". Peers are the endpoints listed alongside this one.
+function nicknameIsShared(node, peers) {
+  var key = String(nodeNickname(node)).toLowerCase()
+  if (!key) return false
+
+  var values = peers && peers.length ? peers : []
+  for (var i = 0; i < values.length; i++) {
+    var peer = values[i]
+    if (!peer || isSameNode(peer, node)) continue
+    if (String(nodeNickname(peer)).toLowerCase() === key) return true
+  }
+  return false
+}
+
+function nodeLabel(node, peers) {
+  if (!node) return "Unknown"
+
+  // Nicknames are the friendliest names PipeWire hands us: an HDMI sink is
+  // nicknamed after the connected display ("LG HDR 4K") while its description
+  // names the GPU's audio controller ("GA104 High Definition Audio Controller
+  // Digital Stereo (HDMI)"). A nickname only stops being useful
+  // when several endpoints share it, and there node.description is what tells
+  // them apart ("Mixer Output 1", "Mixer Output 2", "Mixer Output 3", ...).
+  var nickname = nodeNickname(node)
+  if (nickname && !nicknameIsShared(node, peers)) return nickname
+
+  return nodeDescription(node) || nickname || friendlyDeviceLabel(node.name || "Unknown")
 }
 
 function isHeadphones(node) {
@@ -242,6 +282,9 @@ if (typeof module !== "undefined") {
     parseSinkAvailability: parseSinkAvailability,
     friendlyDeviceLabel: friendlyDeviceLabel,
     nodeProps: nodeProps,
+    nodeNickname: nodeNickname,
+    nodeDescription: nodeDescription,
+    nicknameIsShared: nicknameIsShared,
     nodeLabel: nodeLabel,
     isHeadphones: isHeadphones,
     sinkGlyph: sinkGlyph,

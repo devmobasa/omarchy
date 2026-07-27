@@ -467,8 +467,10 @@ Panel {
     return Model.friendlyDeviceLabel(text)
   }
 
-  function nodeLabel(node) {
-    return Model.nodeLabel(node)
+  // Peers are the other endpoints listed in the same section; they decide
+  // whether this node's nickname is distinctive enough to show on its own.
+  function nodeLabel(node, peers) {
+    return Model.nodeLabel(node, peers)
   }
 
   function nodeProps(node) {
@@ -1000,7 +1002,7 @@ Panel {
       }
 
       Text {
-        text: root.nodeLabel(sinkRow.node)
+        text: root.nodeLabel(sinkRow.node, root.displayAudioSinks)
         color: root.bar.foreground
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
@@ -1059,7 +1061,7 @@ Panel {
       }
 
       Text {
-        text: root.nodeLabel(sourceRow.node)
+        text: root.nodeLabel(sourceRow.node, root.displayAudioSources)
         color: root.bar.foreground
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
