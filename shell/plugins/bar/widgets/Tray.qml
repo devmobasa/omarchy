@@ -2,6 +2,7 @@ import Quickshell
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
+import QtQml.Models
 import Quickshell.Services.SystemTray
 import qs.Commons
 import qs.Ui
@@ -16,6 +17,21 @@ BarWidget {
   property bool trayMenuOpen: false
   property var activeTrayItem: null
   property var activeTrayAnchor: null
+  property var trayMenuStack: []
+  property int trayMenuSelectedIndex: -1
+  property bool trayMenuChanging: false
+  property bool trayMenuInvalidationPending: false
+  property bool trayMenuPointerGuarded: false
+  readonly property int trayMenuDepth: trayMenuStack.length
+  readonly property var activeTraySubmenu: trayMenuStack.length > 0 ? trayMenuStack[trayMenuStack.length - 1] : null
+  readonly property var trayMenuEntries: {
+    var openerCount = traySubmenuOpeners.count
+    if (trayMenuDepth > 0 && openerCount >= trayMenuDepth) {
+      var opener = traySubmenuOpeners.objectAt(trayMenuDepth - 1)
+      if (opener) return opener.children
+    }
+    return trayRootMenuOpener.children
+  }
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property var pinnedIds: settings.pinned instanceof Array ? settings.pinned : []
@@ -35,11 +51,34 @@ BarWidget {
 
   function close() {
     managePopupOpen = false
+    closeTrayMenu()
+  }
+
+  function closeTrayMenu() {
+    var wasChanging = trayMenuChanging
+    trayMenuChanging = true
+    releaseTraySubmenus()
     trayMenuOpen = false
+    activeTrayItem = null
+    activeTrayAnchor = null
+    trayMenuSelectedIndex = -1
+    trayMenuPointerGuarded = false
+    trayMenuPointerGuard.stop()
+    trayMenuChanging = wasChanging
+  }
+
+  function toggleManagePopup() {
+    var opening = !managePopupOpen
+    if (opening) closeTrayMenu()
+    managePopupOpen = opening
   }
 
   function openTrayMenu(item, anchorItem, mouse) {
-    if (!item || !item.menu) {
+    if (!item) return
+
+    closeTrayMenu()
+    managePopupOpen = false
+    if (!item.menu) {
       var point = anchorItem.QsWindow.contentItem.mapFromItem(anchorItem, mouse.x, mouse.y)
       item.display(anchorItem.QsWindow.window, point.x, point.y)
       return
@@ -48,6 +87,160 @@ BarWidget {
     activeTrayItem = item
     activeTrayAnchor = anchorItem
     trayMenuOpen = true
+    resetTrayMenuScroll()
+    resetTrayMenuSelection()
+  }
+
+  function openTraySubmenu(entry, fromPointer) {
+    if (!entry || !entry.hasChildren || (fromPointer && trayMenuPointerGuarded)) return false
+    trayMenuChanging = true
+    trayMenuStack = trayMenuStack.concat([entry])
+    trayMenuChanging = false
+    if (fromPointer) guardTrayMenuPointer()
+    resetTrayMenuScroll()
+    resetTrayMenuSelection()
+    return true
+  }
+
+  function closeTraySubmenu(fromPointer) {
+    if (trayMenuStack.length === 0 || (fromPointer && trayMenuPointerGuarded)) return false
+    trayMenuChanging = true
+    var opener = traySubmenuOpeners.objectAt(trayMenuStack.length - 1)
+    if (opener) opener.menu = null
+    trayMenuStack = trayMenuStack.slice(0, trayMenuStack.length - 1)
+    trayMenuChanging = false
+    if (fromPointer) guardTrayMenuPointer()
+    resetTrayMenuScroll()
+    resetTrayMenuSelection()
+    return true
+  }
+
+  function releaseTraySubmenus() {
+    for (var i = traySubmenuOpeners.count - 1; i >= 0; i--) {
+      var opener = traySubmenuOpeners.objectAt(i)
+      if (opener) opener.menu = null
+    }
+    trayMenuStack = []
+  }
+
+  function scheduleTrayMenuInvalidation() {
+    if (trayMenuChanging || trayMenuInvalidationPending) return
+    trayMenuInvalidationPending = true
+    Qt.callLater(function() {
+      trayMenuInvalidationPending = false
+      if (!trayMenuOpen) return
+      trayMenuChanging = true
+      releaseTraySubmenus()
+      trayMenuChanging = false
+      resetTrayMenuScroll()
+      resetTrayMenuSelection()
+    })
+  }
+
+  function guardTrayMenuPointer() {
+    trayMenuPointerGuarded = true
+    trayMenuPointerGuard.restart()
+  }
+
+  function resetTrayMenuScroll() {
+    Qt.callLater(function() {
+      trayMenuFlick.contentY = 0
+    })
+  }
+
+  function isRootTitleEntry(entry, index) {
+    if (trayMenuDepth !== 0 || index !== 0 || !entry || !entry.hasChildren) return false
+    var rowText = String(entry.text || "").toLowerCase()
+    var activeTitle = activeTrayItem ? String(activeTrayItem.title || activeTrayItem.id || "").toLowerCase() : ""
+    return rowText === activeTitle
+  }
+
+  function isTrayMenuRowHidden(entry, index) {
+    return isRootTitleEntry(entry, index) || (trayMenuDepth === 0 && entry && entry.isSeparator && index <= 1)
+  }
+
+  function isTrayMenuRowSelectable(entry, index) {
+    return !!entry && !entry.isSeparator && entry.enabled && !isTrayMenuRowHidden(entry, index)
+  }
+
+  function trayMenuRows() {
+    return trayMenuEntries && trayMenuEntries.values ? trayMenuEntries.values : []
+  }
+
+  function resetTrayMenuSelection() {
+    trayMenuSelectedIndex = -1
+    Qt.callLater(function() {
+      if (!trayMenuOpen) return
+      var rows = trayMenuRows()
+      for (var i = 0; i < rows.length; i++) {
+        if (isTrayMenuRowSelectable(rows[i], i)) {
+          trayMenuSelectedIndex = i
+          ensureTrayMenuSelectionVisible()
+          return
+        }
+      }
+    })
+  }
+
+  function moveTrayMenuSelection(delta) {
+    var rows = trayMenuRows()
+    if (rows.length === 0 || delta === 0) return false
+    var index = trayMenuSelectedIndex
+    for (var step = 0; step < rows.length; step++) {
+      index = index < 0 ? (delta > 0 ? 0 : rows.length - 1) : (index + delta + rows.length) % rows.length
+      if (isTrayMenuRowSelectable(rows[index], index)) {
+        trayMenuSelectedIndex = index
+        ensureTrayMenuSelectionVisible()
+        return true
+      }
+    }
+    return false
+  }
+
+  function ensureTrayMenuSelectionVisible() {
+    Qt.callLater(function() {
+      var row = trayMenuRepeater.itemAt(trayMenuSelectedIndex)
+      if (!row) return
+      if (row.y < trayMenuFlick.contentY) trayMenuFlick.contentY = row.y
+      else if (row.y + row.height > trayMenuFlick.contentY + trayMenuFlick.height)
+        trayMenuFlick.contentY = row.y + row.height - trayMenuFlick.height
+    })
+  }
+
+  function selectedTrayMenuEntry() {
+    var rows = trayMenuRows()
+    return trayMenuSelectedIndex >= 0 && trayMenuSelectedIndex < rows.length ? rows[trayMenuSelectedIndex] : null
+  }
+
+  function activateTrayMenuEntry(entry, fromPointer) {
+    if (!entry || entry.isSeparator || !entry.enabled || (fromPointer && trayMenuPointerGuarded)) return false
+    if (entry.hasChildren) return openTraySubmenu(entry, fromPointer)
+    entry.triggered()
+    close()
+    return true
+  }
+
+  function activateSelectedTrayMenuEntry() {
+    return activateTrayMenuEntry(selectedTrayMenuEntry(), false)
+  }
+
+  function navigateTrayMenuHorizontally(direction) {
+    if (direction < 0) return closeTraySubmenu(false)
+    var entry = selectedTrayMenuEntry()
+    return entry && entry.hasChildren ? openTraySubmenu(entry, false) : false
+  }
+
+  onTrayMenuEntriesChanged: resetTrayMenuSelection()
+
+  Timer {
+    id: trayMenuPointerGuard
+    interval: Application.styleHints.mouseDoubleClickInterval
+    onTriggered: root.trayMenuPointerGuarded = false
+  }
+
+  Connections {
+    target: root.trayMenuEntries
+    function onValuesChanged() { root.resetTrayMenuSelection() }
   }
 
   function trayIconSource(icon) {
@@ -190,7 +383,7 @@ BarWidget {
           x: root.drawerExtent - root.revealExtent
           text: "\uf053"
           onPressed: function(button) {
-            if (button === Qt.RightButton) root.managePopupOpen = !root.managePopupOpen
+            if (button === Qt.RightButton) root.toggleManagePopup()
           }
         }
 
@@ -273,7 +466,7 @@ BarWidget {
           text: "\uf053"
           textRotation: 90
           onPressed: function(button) {
-            if (button === Qt.RightButton) root.managePopupOpen = !root.managePopupOpen
+            if (button === Qt.RightButton) root.toggleManagePopup()
           }
         }
 
@@ -431,21 +624,65 @@ BarWidget {
     }
   }
 
-  QsMenuOpener {
-    id: trayMenuOpener
-    menu: root.activeTrayItem ? root.activeTrayItem.menu : null
+  component TrayMenuSeparatorLine: Rectangle {
+    implicitHeight: 1
+    height: implicitHeight
+    color: Color.popups.border
+    opacity: 0.45
   }
 
-  PopupCard {
+  QsMenuOpener {
+    id: trayRootMenuOpener
+    menu: root.trayMenuOpen && root.activeTrayItem ? root.activeTrayItem.menu : null
+
+    onMenuChanged: {
+      if (root.trayMenuOpen && !root.trayMenuChanging && menu === null)
+        Qt.callLater(root.closeTrayMenu)
+    }
+  }
+
+  // One opener per depth keeps every ancestor ref'd until the user navigates
+  // back out. A single opener would emit DBusMenu "closed" for the parent as
+  // soon as it switched to a child submenu.
+  Instantiator {
+    id: traySubmenuOpeners
+    model: root.trayMenuStack
+
+    delegate: QsMenuOpener {
+      required property var modelData
+      menu: modelData
+
+      onMenuChanged: {
+        if (root.trayMenuOpen && !root.trayMenuChanging && menu === null)
+          root.scheduleTrayMenuInvalidation()
+      }
+    }
+  }
+
+  KeyboardPanel {
     id: trayMenuPopup
     anchorItem: root.activeTrayAnchor || root
     owner: root
     bar: root.bar
-    open: root.trayMenuOpen
+    open: root.trayMenuOpen && root.QsWindow.window !== null
+    focusTarget: trayMenuKeyCatcher
     padding: Style.space(8)
-    borderColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.45)
+    borderSpec: Border.localOrSurfaceSpec("popups", "border", Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.45), Color.popups.border, Math.max(1, Style.space(2)))
     contentWidth: trayMenuPopup.fittedContentWidth(Style.space(232))
     contentHeight: trayMenuPopup.fittedContentHeight(trayMenuColumn.implicitHeight, Style.space(420))
+
+    PanelKeyCatcher {
+      id: trayMenuKeyCatcher
+      anchors.fill: parent
+
+      onMoveRequested: function(dx, dy) {
+        if (dy !== 0) root.moveTrayMenuSelection(dy)
+        else if (dx !== 0) root.navigateTrayMenuHorizontally(dx)
+      }
+      onActivateRequested: root.activateSelectedTrayMenuEntry()
+      onCloseRequested: root.close()
+      onTabRequested: function(direction) { root.moveTrayMenuSelection(direction) }
+    }
 
     Flickable {
       id: trayMenuFlick
@@ -464,8 +701,61 @@ BarWidget {
         width: trayMenuFlick.width
         spacing: 0
 
+        Item {
+          id: submenuHeader
+          visible: root.activeTraySubmenu !== null
+          width: trayMenuColumn.width
+          implicitHeight: visible ? Style.space(30) : 0
+
+          Rectangle {
+            anchors.fill: parent
+            radius: Math.max(2, Style.cornerRadius)
+            color: submenuBackMouse.containsMouse ? Style.hoverFillFor(root.foreground, root.foreground) : "transparent"
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(10)
+            text: "\u2039"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(28)
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(10)
+            text: root.activeTraySubmenu ? String(root.activeTraySubmenu.text || "") : ""
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+            elide: Text.ElideRight
+          }
+
+          MouseArea {
+            id: submenuBackMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.closeTraySubmenu(true)
+          }
+        }
+
+        TrayMenuSeparatorLine {
+          visible: root.activeTraySubmenu !== null
+          width: trayMenuColumn.width - Style.space(20)
+          height: visible ? implicitHeight : 0
+          anchors.horizontalCenter: parent.horizontalCenter
+        }
+
         Repeater {
-          model: trayMenuOpener.children
+          id: trayMenuRepeater
+          model: root.trayMenuEntries
 
           delegate: Item {
             id: menuRow
@@ -473,33 +763,28 @@ BarWidget {
             required property int index
 
             readonly property string rowText: String(modelData.text || "")
-            readonly property string activeTitle: root.activeTrayItem ? String(root.activeTrayItem.title || root.activeTrayItem.id || "") : ""
-            readonly property bool rootTitleEntry: index === 0 && modelData.hasChildren && rowText.toLowerCase() === activeTitle.toLowerCase()
-            readonly property bool leadingSeparator: modelData.isSeparator && index <= 1
-            readonly property bool hiddenRow: rootTitleEntry || leadingSeparator
+            readonly property bool hiddenRow: root.isTrayMenuRowHidden(modelData, index)
 
             visible: !hiddenRow
             width: trayMenuColumn.width
             implicitHeight: hiddenRow ? 0 : (modelData.isSeparator ? Style.space(11) : Style.space(30))
             opacity: modelData.enabled ? 1.0 : 0.45
 
-            Rectangle {
+            TrayMenuSeparatorLine {
               visible: menuRow.modelData.isSeparator
               anchors.left: parent.left
               anchors.leftMargin: Style.space(10)
               anchors.right: parent.right
               anchors.rightMargin: Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
-              height: 1
-              color: Color.popups.border
-              opacity: 0.45
             }
 
             Rectangle {
               visible: !menuRow.modelData.isSeparator
               anchors.fill: parent
               radius: Math.max(2, Style.cornerRadius)
-              color: rowMouse.containsMouse && menuRow.modelData.enabled ? Style.hoverFillFor(root.foreground, root.foreground) : "transparent"
+              color: (rowMouse.containsMouse || root.trayMenuSelectedIndex === menuRow.index) && menuRow.modelData.enabled
+                ? Style.hoverFillFor(root.foreground, root.foreground) : "transparent"
             }
 
             Text {
@@ -562,15 +847,8 @@ BarWidget {
               hoverEnabled: true
               enabled: !menuRow.modelData.isSeparator && menuRow.modelData.enabled
               cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-              onClicked: {
-                if (menuRow.modelData.hasChildren) {
-                  var point = menuRow.QsWindow.contentItem.mapFromItem(menuRow, menuRow.width, menuRow.height / 2)
-                  menuRow.modelData.display(menuRow.QsWindow.window, point.x, point.y)
-                } else {
-                  menuRow.modelData.triggered()
-                  root.close()
-                }
-              }
+              onEntered: root.trayMenuSelectedIndex = menuRow.index
+              onClicked: root.activateTrayMenuEntry(menuRow.modelData, true)
             }
           }
         }
