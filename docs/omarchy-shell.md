@@ -43,6 +43,14 @@ Entry points are QML `Item`s. Panel, overlay, and menu entry points expose `open
 
 A third-party replacement bar can render registered widget components, but widgets it hosts receive a service-less entry facade. Allowing the bar to manufacture an own-service facade for an arbitrary widget would also let it retrieve that plugin's live service object. Service-backed third-party widgets therefore retain their full integration only under the trusted built-in bar; a replacement bar may still provide their target-scoped lifecycle and settings operations.
 
+### Capture lock state
+
+`shell.workspaceCaptureState` is a read-only, frozen scalar snapshot available through both ordinary and service-less plugin facades. Version 1 has exactly four fields: `version: 1`, `known: boolean`, `locked: boolean`, and a monotonically increasing integer `generation`. It contains no authentication service, QObject, credential, callback, or lock/unlock action. As with other facade properties, this is an API contract rather than a sandbox against arbitrary code in the same process.
+
+Consumers must stop capture when the capability is absent, `known` is not true, or `locked` is not false. Startup, loss of lock-state knowledge, service removal/replacement, and QObject destruction publish unknown/locked state. A lock request publishes blocked state synchronously; the lock service's `locked` property includes its pending request as well as active and secure locks. Unlock is published only after the current event turn settles, preventing intermediate stranded-lock recovery updates from granting capture. Service-generation checks discard queued notifications from replaced services.
+
+This capability covers the Omarchy-managed session lock only; it does not establish compositor connectivity, capture permission, frame freshness, or GPU allocation bounds. Capture consumers still need independent connection and image-lifetime gates. A third-party locker that bypasses the Omarchy lock service is outside this contract. Plugins must not infer lock state by traversing authentication objects or treat periodic `isLocked` IPC responses as synchronous notifications.
+
 Full schema: [`shell/services/PluginRegistry.qml`](../shell/services/PluginRegistry.qml).
 
 ## Installing a third-party plugin

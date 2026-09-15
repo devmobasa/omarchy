@@ -16,6 +16,9 @@ QtObject {
   property var bar: null
   property var barConfig: ({})
   property var idleConfig: ({})
+  // Immutable scalar snapshot. No authentication QObjects or actions.
+  property var _workspaceCaptureState: Object.freeze({ version: 1, known: false, locked: true, generation: 0 })
+  readonly property var workspaceCaptureState: api._workspaceCaptureState
 
   property var _serviceLookup: null
   property var _firstPartyServiceLookup: null

@@ -43,6 +43,8 @@ Item {
   property bool strandedLockResolved: false
 
   readonly property bool locked: lockRequested || sessionLock.locked || sessionLock.secure
+  signal captureStateInvalidated()
+  Component.onDestruction: captureStateInvalidated()
   readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating
   readonly property var batteryService: shell && shell.services ? shell.firstPartyServiceFor("omarchy.battery") : null
   readonly property bool powerSaverActive: batteryService ? batteryService.powerSaverOnBattery : false
