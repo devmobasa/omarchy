@@ -143,6 +143,7 @@ ShellRoot {
   }
 
   Component.onCompleted: {
+    AuthServiceStore.setCaptureStatePublisher(function(state) { shell.workspaceCaptureState = state })
     console.log("omarchy-shell paths",
       "omarchyPath=" + shell.omarchyPath,
       "shellDir=" + Quickshell.shellDir,
@@ -275,6 +276,7 @@ ShellRoot {
 
   property var _services: ({})
   property var _pluginShellApis: ({})
+  property var workspaceCaptureState: Object.freeze({ version: 1, known: false, locked: true, generation: 0 })
   property var _pluginShellApiDescriptors: ({})
   property var _pluginBarEntryShellApis: ({})
   property var _pluginRegistryApis: ({})
@@ -592,6 +594,7 @@ ShellRoot {
 
     var api = pluginShellApiComponent.createObject(null, {
       pluginId: key,
+      _workspaceCaptureState: Qt.binding(function() { return shell.workspaceCaptureState }),
       appLibrary: shell.manifestHasKind(manifest, "menu")
         ? shell.pluginAppLibraryFor(cacheKey, key) : null,
       bar: shell.pluginBarStateFor(cacheKey, key),
@@ -690,6 +693,7 @@ ShellRoot {
 
     var api = pluginShellApiComponent.createObject(null, {
       pluginId: target,
+      _workspaceCaptureState: Qt.binding(function() { return shell.workspaceCaptureState }),
       barConfig: shell.publicBarConfig(),
       _summon: function(requestedId, payloadJson) {
         if (!owns(requestedId)

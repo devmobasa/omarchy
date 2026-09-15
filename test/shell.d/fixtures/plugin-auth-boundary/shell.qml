@@ -14,6 +14,7 @@ ShellRoot {
 
   AuthStoreOwner { id: authStoreOwner }
   AuthStoreReader { id: authStoreReader }
+  CaptureStateAssertions { id: captureStateAssertions }
 
   Component {
     id: apiComponent
@@ -87,6 +88,10 @@ ShellRoot {
     result.ok = Object.keys(result).every(function(key) {
       return key === "ok" || key === "calls" || result[key] === true
     }) && JSON.stringify(result.calls) === JSON.stringify(["summon", "hide", "toggle", "settings"])
-    resultFile.setText(JSON.stringify(result))
+    captureStateAssertions.run(api, function(failures) {
+      result.captureStateFailures = failures
+      result.ok = result.ok && failures.length === 0
+      resultFile.setText(JSON.stringify(result))
+    })
   }
 }
